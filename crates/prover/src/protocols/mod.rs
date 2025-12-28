@@ -1,6 +1,7 @@
 // Copyright 2025 Irreducible Inc.
 
 pub mod basefold;
+pub mod frac_add_check;
 mod inout_check;
 pub mod intmul;
 pub mod prodcheck;
