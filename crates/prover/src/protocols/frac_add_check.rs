@@ -1,8 +1,9 @@
 use binius_field::{Field, PackedField};
 use binius_math::FieldBuffer;
 use binius_utils::rayon::iter::{IntoParallelIterator, ParallelIterator};
+use binius_verifier::protocols::prodcheck::MultilinearEvalClaim;
 
-use crate::protocols::intmul::witness;
+use crate::protocols::{intmul::witness, sumcheck::frac_add::FractionalBuffer};
 
 /// Prover for the fractional addition protocol.
 ///
@@ -12,24 +13,23 @@ pub struct FracAddCheckProver<P: PackedField> {
 	layers: Vec<(FieldBuffer<P>, FieldBuffer<P>)>,
 }
 
-pub type FractionalBuffer<P> = (FieldBuffer<P>, FieldBuffer<P>);
 impl<F, P> FracAddCheckProver<P>
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
 {
-    pub fn new(k: usize, witness: FractionalBuffer<P>)->(Self, FractionalBuffer<P>){
-        let (witness_num, witness_den) = witness;
-        assert_eq!(witness_num.log_len(), witness_den.log_len());
-        assert!(k>= witness_num.log_len());
+	pub fn new(k: usize, witness: FractionalBuffer<P>) -> (Self, FractionalBuffer<P>) {
+		let (witness_num, witness_den) = witness;
+		assert_eq!(witness_num.log_len(), witness_den.log_len());
+		assert!(k >= witness_num.log_len());
 
-        let mut layers = Vec::with_capacity(k+1);
-        layers.push((witness_num, witness_den));
+		let mut layers = Vec::with_capacity(k + 1);
+		layers.push((witness_num, witness_den));
 
-       for _ in 0..k {
+		for _ in 0..k {
 			let prev_layer = layers.last().expect("layers is non-empty");
 
-            let (num, den) = prev_layer;
+			let (num, den) = prev_layer;
 			let (num_0, num_1) = num
 				.split_half_ref()
 				.expect("layer has at least one variable");
@@ -38,17 +38,41 @@ where
 				.split_half_ref()
 				.expect("layer has at least one variable");
 
-			let (next_layer_num, next_layer_den) = (num_0.as_ref(), den_0.as_ref(), num_1.as_ref(), den_1.as_ref())
-				.into_par_iter()
-				.map(|(&a_0, &b_0, &a_1, &b_1)| (a_0 * b_1 + a_1*b_0, b_0*b_1))
-				.collect();
+			let (next_layer_num, next_layer_den) =
+				(num_0.as_ref(), den_0.as_ref(), num_1.as_ref(), den_1.as_ref())
+					.into_par_iter()
+					.map(|(&a_0, &b_0, &a_1, &b_1)| (a_0 * b_1 + a_1 * b_0, b_0 * b_1))
+					.collect();
 
-            let next_layer = (FieldBuffer::new(num.log_len() - 1, next_layer_num).expect("Should be half of previous layer"), FieldBuffer::new(den.log_len() - 1, next_layer_den).expect("Should be half of previous layer"));
+			let next_layer = (
+				FieldBuffer::new(num.log_len() - 1, next_layer_num)
+					.expect("Should be half of previous layer"),
+				FieldBuffer::new(den.log_len() - 1, next_layer_den)
+					.expect("Should be half of previous layer"),
+			);
 
 			layers.push(next_layer);
 		}
 
-        let sums = layers.pop().expect("layers has k+1 elements"); 
-        (Self { layers}, sums)
-    }
+		let sums = layers.pop().expect("layers has k+1 elements");
+		(Self { layers }, sums)
+	}
+
+	// pub fn layer_prover(
+	// 	mut self,
+	// 	claim: (MultilinearEvalClaim<F>, MultilinearEvalClaim<F>)
+	// ) -> Result<(impl MleCheckProver<F>, Option<Self>), Error> {
+	// 	let layer = self.layers.pop().expect("layers is non-empty");
+	// 	let split = layer.split_half().expect("layer has at least one variable");
+
+	// 	let remaining = if self.layers.is_empty() {
+	// 		None
+	// 	} else {
+	// 		Some(self)
+	// 	};
+
+	// 	let prover = bivariate_product_mle::new(split, claim.point, claim.eval)?;
+
+	// 	Ok((prover, remaining))
+	// }
 }
