@@ -397,7 +397,7 @@ impl UnderlierWithBitOps for M512 {
 	unsafe fn spread<T>(self, log_block_len: usize, block_idx: usize) -> Self
 	where
 		T: UnderlierWithBitOps + NumCast<Self>,
-		Self: Divisible<T> + From<T>,
+		Self: Divisible<T>,
 	{
 		match T::LOG_BITS {
 			0 => match log_block_len {
