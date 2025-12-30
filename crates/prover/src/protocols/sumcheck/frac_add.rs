@@ -62,6 +62,7 @@ where
 	F: Field,
 	P: PackedField<Scalar = F>,
 {
+	// Expose the evaluation point so wrappers can lift this MLE-check prover into sumcheck.
 	fn eval_point(&self) -> &[F] {
 		self.gruen32.eval_point()
 	}
@@ -115,6 +116,7 @@ where
 				|lhs, rhs| Ok([lhs[0] + &rhs[0], lhs[1] + &rhs[1]]),
 			)?;
 
+		// These are MLE-check "prime" round polynomials; sumcheck wrappers apply the eq factor.
 		let alpha = self.gruen32.next_coordinate();
 		let round_coeffs = izip!(sums, packed_prime_evals)
 			.map(|(&sum, packed_evals)| {
@@ -184,6 +186,7 @@ fn accumulate_chunk<P: PackedField>(
 		.map(|buf| buf.split_half_ref())
 		.collect::<Result<Vec<_>, _>>()?;
 
+	// Ordering: [num_a, den_a, num_b, den_b] × {low, high} chunks.
 	let chunks = splits
 		.iter()
 		.map(|(lo, hi)| {
@@ -297,10 +300,11 @@ mod tests {
 			.message()
 			.write_scalar_slice(&prover_evals);
 
-		// Convert to verifier transcript and run verification
-		let mut verifier_transcript = prover_transcript.into_verifier();
-		let sumcheck_output =
-			batch_verify(n_vars, 3, &eval_claims, &mut verifier_transcript).unwrap();
+	// Convert to verifier transcript and run verification
+	let mut verifier_transcript = prover_transcript.into_verifier();
+	let sumcheck_output =
+		// Degree 3 because quadratic prime polynomials are multiplied by a linear eq term.
+		batch_verify(n_vars, 3, &eval_claims, &mut verifier_transcript).unwrap();
 
 		// The prover binds variables from high to low, but evaluate expects them from low to high
 		let mut reduced_eval_point = sumcheck_output.challenges.clone();
@@ -309,8 +313,8 @@ mod tests {
 		// Read the multilinear evaluations from the transcript
 		let multilinear_evals: Vec<F> = verifier_transcript.message().read_vec(4).unwrap();
 
-		// Evaluate the equality indicator
-		let eq_ind_eval = eq_ind(eval_point, &reduced_eval_point);
+	// Evaluate the equality indicator
+	let eq_ind_eval = eq_ind(eval_point, &reduced_eval_point);
 
 		// Check that the original multilinears evaluate to the claimed values at the challenge
 		// point
@@ -336,10 +340,11 @@ mod tests {
 			"Denominator B should evaluate to the fourth claimed evaluation"
 		);
 
-		// Check that the batched evaluation matches the sumcheck output
-		let numerator_eval = (eval_num_a * eval_den_b + eval_num_b * eval_den_a) * eq_ind_eval;
-		let denominator_eval = (eval_den_a * eval_den_b) * eq_ind_eval;
-		let batched_eval = numerator_eval + denominator_eval * sumcheck_output.batch_coeff;
+	// Check that the batched evaluation matches the sumcheck output
+	// Sumcheck wraps the prime polynomial with an eq factor, so include eq_ind_eval here.
+	let numerator_eval = (eval_num_a * eval_den_b + eval_num_b * eval_den_a) * eq_ind_eval;
+	let denominator_eval = (eval_den_a * eval_den_b) * eq_ind_eval;
+	let batched_eval = numerator_eval + denominator_eval * sumcheck_output.batch_coeff;
 
 		assert_eq!(
 			batched_eval, sumcheck_output.eval,
@@ -380,21 +385,22 @@ mod tests {
 		let numerator_buffer = FieldBuffer::new(n_vars, numerator_values).unwrap();
 		let denominator_buffer = FieldBuffer::new(n_vars, denominator_values).unwrap();
 
-		let eval_point = random_scalars::<F>(&mut rng, n_vars);
-		let rev_eval_point = eval_point.iter().rev().copied().collect_vec();
-		let eval_claims = [
-			evaluate(&numerator_buffer, &eval_point).unwrap(),
-			evaluate(&denominator_buffer, &eval_point).unwrap(),
-		];
+	let eval_point = random_scalars::<F>(&mut rng, n_vars);
+	// Claims are at the original eval_point; verifier handles challenge ordering separately.
+	let eval_claims = [
+		evaluate(&numerator_buffer, &eval_point).unwrap(),
+		evaluate(&denominator_buffer, &eval_point).unwrap(),
+	];
 
-		let frac_prover = FracAddProver::new(
-			[num_a.clone(), den_a.clone(), num_b.clone(), den_b.clone()],
-			&eval_point,
-			eval_claims,
-		)
-		.unwrap();
+	let frac_prover = FracAddProver::new(
+		[num_a.clone(), den_a.clone(), num_b.clone(), den_b.clone()],
+		&eval_point,
+		eval_claims,
+	)
+	.unwrap();
 
-		let prover = MleToSumCheckDecorator::new(frac_prover);
+	// Wrap the MLE-check prover so it emits sumcheck-compatible round polynomials.
+	let prover = MleToSumCheckDecorator::new(frac_prover);
 
 		test_frac_add_sumcheck_prove_verify(
 			prover,
