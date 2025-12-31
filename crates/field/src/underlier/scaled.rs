@@ -5,7 +5,11 @@ use std::{
 	ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, Shr},
 };
 
-use binius_utils::checked_arithmetics::checked_log_2;
+use binius_utils::{
+	DeserializeBytes, SerializationError, SerializeBytes,
+	bytes::{Buf, BufMut},
+	checked_arithmetics::checked_log_2,
+};
 use bytemuck::{Pod, Zeroable};
 use rand::{
 	Rng,
@@ -13,10 +17,10 @@ use rand::{
 };
 
 use super::{Divisible, NumCast, UnderlierType, UnderlierWithBitOps, mapget};
-use crate::Random;
+use crate::{BinaryField, Random, arch::PackedPrimitiveType, as_packed_field::PackScalar};
 
-/// A type that represents a pair of elements of the same underlier type.
-/// We use it as an underlier for the `ScaledPackedField` type.
+/// A type that represents N elements of the same underlier type.
+/// Used as an underlier for 256-bit and 512-bit packed fields in the portable implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct ScaledUnderlier<U, const N: usize>(pub [U; N]);
@@ -261,6 +265,30 @@ where
 	fn from_iter(mut iter: impl Iterator<Item = T>) -> Self {
 		Self(array::from_fn(|_| Divisible::<T>::from_iter(&mut iter)))
 	}
+}
+
+impl<U: SerializeBytes, const N: usize> SerializeBytes for ScaledUnderlier<U, N> {
+	fn serialize(&self, write_buf: impl BufMut) -> Result<(), SerializationError> {
+		self.0.serialize(write_buf)
+	}
+}
+
+impl<U: DeserializeBytes, const N: usize> DeserializeBytes for ScaledUnderlier<U, N> {
+	fn deserialize(read_buf: impl Buf) -> Result<Self, SerializationError> {
+		<[U; N]>::deserialize(read_buf).map(Self)
+	}
+}
+
+impl<UU: UnderlierType, F: BinaryField, const N: usize> PackScalar<F> for ScaledUnderlier<UU, N>
+where
+	ScaledUnderlier<UU, N>: UnderlierWithBitOps + Divisible<F::Underlier>,
+	PackedPrimitiveType<Self, F>: crate::arithmetic_traits::Broadcast<F>
+		+ crate::arithmetic_traits::Square
+		+ crate::arithmetic_traits::InvertOrZero
+		+ std::ops::Mul<Output = PackedPrimitiveType<Self, F>>,
+	//	PackedPrimitiveType<Self, F>: PackedField<Scalar=F>,
+{
+	type Packed = PackedPrimitiveType<ScaledUnderlier<UU, N>, F>;
 }
 
 #[cfg(test)]
