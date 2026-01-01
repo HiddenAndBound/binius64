@@ -6,7 +6,8 @@ use crate::protocols::sumcheck::{
 };
 use binius_field::{Field, PackedField};
 use binius_math::{
-	AsSlicesMut, FieldBuffer, FieldSliceMut, multilinear::fold::fold_highest_var_inplace,
+	AsSlicesMut, FieldBuffer, FieldSliceMut, field_buffer::FieldBufferSplitMut,
+	multilinear::fold::fold_highest_var_inplace,
 };
 use binius_utils::rayon::prelude::*;
 use binius_verifier::protocols::sumcheck::RoundCoeffs;
@@ -19,14 +20,16 @@ enum RoundCoeffsOrEvals<F: Field> {
 	Evals([F; 2]),
 }
 
-// Prover for the fractional additional claims required in LogUp*. We keep numerators and denominators in pairs.
-pub struct FracAddProver<P: PackedField> {
+// Prover for the fractional additional claims required in LogUp*. We keep numerators and denominators to be added in a single buffer respectively, with the assumption that the 2 collections to be added are in either half.
+pub struct FracAddMleCheckProver<P: PackedField> {
+	// Parallel arrays: index 0 = numerator MLE evals, index 1 = denominator MLE evals.
 	fraction_pairs: [FieldBuffer<P>; 2],
+	// Alternates between the last round's polynomial coefficients and the folded evaluation values.
 	last_coeffs_or_evals: RoundCoeffsOrEvals<P::Scalar>,
 	gruen32: Gruen32<P>,
 }
 
-impl<F: Field, P: PackedField<Scalar = F>> FracAddProver<P> {
+impl<F: Field, P: PackedField<Scalar = F>> FracAddMleCheckProver<P> {
 	/// Constructs a prover, given the multilinear polynomial evaluations (in pairs) and
 	/// evaluation claims on the shared evaluation point.
 	pub fn new(
@@ -37,6 +40,7 @@ impl<F: Field, P: PackedField<Scalar = F>> FracAddProver<P> {
 		let n_vars = eval_point.len();
 
 		let (num, den) = fraction;
+		// One extra variable for the numerator/denominator selector bit.
 		if num.log_len() != n_vars + 1 || den.log_len() != n_vars + 1 {
 			return Err(Error::MultilinearSizeMismatch);
 		}
@@ -54,7 +58,7 @@ impl<F: Field, P: PackedField<Scalar = F>> FracAddProver<P> {
 	}
 }
 
-impl<F, P> MleCheckProver<F> for FracAddProver<P>
+impl<F, P> MleCheckProver<F> for FracAddMleCheckProver<P>
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
@@ -65,7 +69,7 @@ where
 	}
 }
 
-impl<F, P> SumcheckProver<F> for FracAddProver<P>
+impl<F, P> SumcheckProver<F> for FracAddMleCheckProver<P>
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
@@ -83,27 +87,21 @@ where
 			return Err(Error::ExpectedFold);
 		};
 
+		// We need at least one variable to produce a round polynomial.
 		assert!(self.n_vars() > 0);
 		let n_vars = self.n_vars();
 		let [num, den] = &mut self.fraction_pairs;
 
 		let mut num_split = num.split_half_mut()?;
 		let mut den_split = den.split_half_mut()?;
-		let [mut num_a, mut num_b] = num_split.as_slices_mut();
-		let [mut den_a, mut den_b] = den_split.as_slices_mut();
 
-		num_a.truncate(n_vars);
-		num_b.truncate(n_vars);
-		den_a.truncate(n_vars);
-		den_b.truncate(n_vars);
-		let slices = [num_a, num_b, den_a, den_b];
-		
-		// Perform chunked summation: for every row, evaluate all compositions and add up
-		// results to an array of round evals accumulators. Alternative would be to sum each
-		// composition on its own pass, but that would require reading the entirety of eq field
-		// buffer on each pass, which will evict the latter from the cache. By doing chunked
-		// compute, we reasonably hope that eq chunk always stays in L1 cache.
+		// Fixed ordering expected by accumulate_chunk: num(0), num(1), den(0), den(1).
+		let slices = split_and_truncate(&mut num_split, &mut den_split, n_vars);
+
+		// Perform chunked summation for benefits detailed in bivariate_product_multi_mle.
 		const MAX_CHUNK_VARS: usize = 8;
+		// Keep enough vars per chunk to amortize eq-eval overhead, but never exceed n_vars - 1
+		// because the highest variable is folded by the round polynomial.
 		let chunk_vars = std::cmp::max(MAX_CHUNK_VARS, P::LOG_WIDTH).min(n_vars - 1);
 
 		let packed_prime_evals: [RoundEvals2<P>; 2] = (0..1 << (n_vars - 1 - chunk_vars))
@@ -146,6 +144,7 @@ where
 			return Err(Error::ExpectedExecute);
 		};
 
+		// Folding substitutes the newest challenge into the highest variable.
 		assert!(self.n_vars() > 0);
 
 		let evals = [
@@ -158,20 +157,14 @@ where
 
 		let mut num_split = num.split_half_mut()?;
 		let mut den_split = den.split_half_mut()?;
-		let [mut num_a, mut num_b] = num_split.as_slices_mut();
-		let [mut den_a, mut den_b] = den_split.as_slices_mut();
+		let mut multilinears = split_and_truncate(&mut num_split, &mut den_split, n_vars);
 
-		num_a.truncate(n_vars);
-		num_b.truncate(n_vars);
-		den_a.truncate(n_vars);
-		den_b.truncate(n_vars);
-
-		fold_highest_var_inplace(&mut num_a, challenge)?;
-		fold_highest_var_inplace(&mut num_b, challenge)?;
-		fold_highest_var_inplace(&mut den_a, challenge)?;
-		fold_highest_var_inplace(&mut den_b, challenge)?;
+		for multilinear in &mut multilinears {
+			fold_highest_var_inplace(multilinear, challenge)?
+		}
 
 		self.gruen32.fold(challenge)?;
+		// After folding, we keep only the new evaluations for the next round.
 		self.last_coeffs_or_evals = RoundCoeffsOrEvals::Evals(evals);
 		Ok(())
 	}
@@ -285,6 +278,23 @@ fn accumulate_chunk<P: PackedField>(
 	Ok(())
 }
 
+fn split_and_truncate<'a, P: PackedField>(
+	num_split: &'a mut FieldBufferSplitMut<P, &mut [P]>,
+	den_split: &'a mut FieldBufferSplitMut<P, &mut [P]>,
+	n_vars: usize,
+) -> [FieldSliceMut<'a, P>; 4] {
+	let [mut num_a, mut num_b] = num_split.as_slices_mut();
+	let [mut den_a, mut den_b] = den_split.as_slices_mut();
+
+	num_a.truncate(n_vars);
+	num_b.truncate(n_vars);
+	den_a.truncate(n_vars);
+	den_b.truncate(n_vars);
+	// Fixed ordering expected by accumulate_chunk: num(0), num(1), den(0), den(1).
+	let slices = [num_a, num_b, den_a, den_b];
+	slices
+}
+
 #[cfg(test)]
 mod tests {
 	use binius_field::arch::{OptimalB128, OptimalPackedB128};
@@ -302,7 +312,7 @@ mod tests {
 	use crate::protocols::sumcheck::{MleToSumCheckDecorator, batch::batch_prove};
 
 	fn test_frac_add_sumcheck_prove_verify<F, P>(
-		prover: MleToSumCheckDecorator<F, FracAddProver<P>>,
+		prover: MleToSumCheckDecorator<F, FracAddMleCheckProver<P>>,
 		eval_claims: [F; 2],
 		eval_point: &[F],
 		num: FieldBuffer<P>,
@@ -421,7 +431,8 @@ mod tests {
 		];
 
 		let frac_prover =
-			FracAddProver::new((num.clone(), den.clone()), &eval_point, eval_claims).unwrap();
+			FracAddMleCheckProver::new((num.clone(), den.clone()), &eval_point, eval_claims)
+				.unwrap();
 
 		// Wrap the MLE-check prover so it emits sumcheck-compatible round polynomials.
 		let prover = MleToSumCheckDecorator::new(frac_prover);

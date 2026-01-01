@@ -11,7 +11,7 @@ use crate::protocols::sumcheck::{
 	Error as SumcheckError, MleToSumCheckDecorator,
 	batch::batch_prove_and_write_evals,
 	common::SumcheckProver,
-	frac_add::{FracAddProver, FractionalBuffer},
+	frac_add_mle::{FracAddMleCheckProver, FractionalBuffer},
 };
 
 /// Prover for the fractional addition protocol.
@@ -128,7 +128,8 @@ where
 			Some(self)
 		};
 
-		let prover = FracAddProver::new(layer, &num_claim.point, [num_claim.eval, den_claim.eval])?;
+		let prover =
+			FracAddMleCheckProver::new(layer, &num_claim.point, [num_claim.eval, den_claim.eval])?;
 
 		Ok((MleToSumCheckDecorator::new(prover), remaining))
 	}
@@ -200,7 +201,7 @@ mod tests {
 		test_utils::{Packed128b, random_field_buffer, random_scalars},
 	};
 	use binius_transcript::ProverTranscript;
-	use binius_verifier::{config::StdChallenger, protocols::frac_add_check};
+	use binius_verifier::{config::StdChallenger, protocols::fracaddcheck};
 	use rand::{SeedableRng, rngs::StdRng};
 
 	use super::*;
@@ -232,7 +233,7 @@ mod tests {
 				point: eval_point.clone(),
 			},
 		);
-		let verifier_claim = frac_add_check::FracAddEvalClaim {
+		let verifier_claim = fracaddcheck::FracAddEvalClaim {
 			num_eval: sum_num_eval,
 			den_eval: sum_den_eval,
 			point: eval_point,
@@ -247,7 +248,7 @@ mod tests {
 		// 6. Run verifier
 		let mut verifier_transcript = prover_transcript.into_verifier();
 		let verifier_output =
-			frac_add_check::verify(k, verifier_claim, &mut verifier_transcript).unwrap();
+			fracaddcheck::verify(k, verifier_claim, &mut verifier_transcript).unwrap();
 
 		// 7. Check outputs match
 		assert_eq!(prover_output.0.point, prover_output.1.point);
