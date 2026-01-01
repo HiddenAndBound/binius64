@@ -61,9 +61,7 @@ pub fn verify<F: Field, Challenger_: Challenger>(
 	let batched_eval = numerator_eval + denominator_eval * batch_coeff;
 
 	if batched_eval != eval {
-		return Err(
-			VerificationError::IncorrectLayerFractionSumEvaluation { round: k }.into(),
-		);
+		return Err(VerificationError::IncorrectLayerFractionSumEvaluation { round: k }.into());
 	}
 
 	// Reduce evaluations of the two halves to a single evaluation at the next point.
