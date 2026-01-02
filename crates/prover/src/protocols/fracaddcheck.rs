@@ -1,3 +1,5 @@
+// Copyright 2025-2026 The Binius Developers
+
 use binius_field::{Field, PackedField};
 use binius_math::{FieldBuffer, line::extrapolate_line_packed};
 use binius_transcript::{

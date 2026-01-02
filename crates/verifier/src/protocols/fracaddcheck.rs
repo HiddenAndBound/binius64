@@ -1,4 +1,4 @@
-// Copyright 2025 The Binius Developers
+// Copyright 2025-2026 The Binius Developers
 
 //! Reduction from fractional-addition layers to a multilinear evaluation claim.
 //!
