@@ -1,3 +1,5 @@
+// Copyright 2025-2026 The Binius Developers
+
 use super::error::Error;
 use crate::protocols::sumcheck::{
 	common::{MleCheckProver, SumcheckProver},
