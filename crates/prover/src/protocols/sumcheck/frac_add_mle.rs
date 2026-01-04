@@ -1,11 +1,5 @@
 // Copyright 2025-2026 The Binius Developers
 
-use super::error::Error;
-use crate::protocols::sumcheck::{
-	common::{MleCheckProver, SumcheckProver},
-	gruen32::Gruen32,
-	round_evals::RoundEvals2,
-};
 use binius_field::{Field, PackedField};
 use binius_math::{
 	AsSlicesMut, FieldBuffer, FieldSliceMut, field_buffer::FieldBufferSplitMut,
@@ -15,6 +9,13 @@ use binius_utils::rayon::prelude::*;
 use binius_verifier::protocols::sumcheck::RoundCoeffs;
 use itertools::izip;
 
+use super::error::Error;
+use crate::protocols::sumcheck::{
+	common::{MleCheckProver, SumcheckProver},
+	gruen32::Gruen32,
+	round_evals::RoundEvals2,
+};
+
 pub type FractionalBuffer<P> = (FieldBuffer<P>, FieldBuffer<P>);
 #[derive(Debug, Clone)]
 enum RoundCoeffsOrEvals<F: Field> {
@@ -22,11 +23,14 @@ enum RoundCoeffsOrEvals<F: Field> {
 	Evals([F; 2]),
 }
 
-// Prover for the fractional additional claims required in LogUp*. We keep numerators and denominators to be added in a single buffer respectively, with the assumption that the 2 collections to be added are in either half.
+// Prover for the fractional additional claims required in LogUp*. We keep numerators and
+// denominators to be added in a single buffer respectively, with the assumption that the 2
+// collections to be added are in either half.
 pub struct FracAddMleCheckProver<P: PackedField> {
 	// Parallel arrays: index 0 = numerator MLE evals, index 1 = denominator MLE evals.
 	fraction_pairs: [FieldBuffer<P>; 2],
-	// Alternates between the last round's polynomial coefficients and the folded evaluation values.
+	// Alternates between the last round's polynomial coefficients and the folded evaluation
+	// values.
 	last_coeffs_or_evals: RoundCoeffsOrEvals<P::Scalar>,
 	gruen32: Gruen32<P>,
 }

@@ -18,7 +18,8 @@ use crate::protocols::sumcheck::{
 
 /// Prover for the fractional addition protocol.
 ///
-/// Each layer is a double of the numerator and denominator values of fractional terms. Each layer represents the addition of siblings with respect to the fractional addition rule:
+/// Each layer is a double of the numerator and denominator values of fractional terms. Each layer
+/// represents the addition of siblings with respect to the fractional addition rule:
 /// $$\frac{a_0}{b_0} + \frac{a_1}{b_1} = \frac{a_0b_1 + a_1b_0}{b_0b_1}$
 pub struct FracAddCheckProver<P: PackedField> {
 	layers: Vec<(FieldBuffer<P>, FieldBuffer<P>)>,
@@ -86,12 +87,12 @@ where
 				(num_0.as_ref(), den_0.as_ref(), num_1.as_ref(), den_1.as_ref())
 					.into_par_iter()
 					.map(|(&a_0, &b_0, &a_1, &b_1)| (a_0 * b_1 + a_1 * b_0, b_0 * b_1))
-					.collect();
+					.collect::<(Vec<_>, Vec<_>)>();
 
 			let next_layer = (
-				FieldBuffer::new(num.log_len() - 1, next_layer_num)
+				FieldBuffer::new(num.log_len() - 1, next_layer_num.into_boxed_slice())
 					.expect("Should be half of previous layer"),
-				FieldBuffer::new(den.log_len() - 1, next_layer_den)
+				FieldBuffer::new(den.log_len() - 1, next_layer_den.into_boxed_slice())
 					.expect("Should be half of previous layer"),
 			);
 
