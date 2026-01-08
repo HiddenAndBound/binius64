@@ -1,12 +1,12 @@
 // Copyright 2025-2026 The Binius Developers
 
-use std::iter::zip;
+use std::cmp::max;
 
 use binius_field::{Field, PackedField};
 use binius_math::{
 	AsSlicesMut, FieldBuffer, FieldSliceMut, multilinear::fold::fold_highest_var_inplace,
 };
-use binius_utils::rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use binius_utils::rayon::prelude::*;
 use binius_verifier::protocols::sumcheck::RoundCoeffs;
 use itertools::{Itertools, izip};
 
@@ -125,57 +125,83 @@ where
 			.map(FieldBuffer::split_half_ref)
 			.collect::<Result<(Vec<_>, Vec<_>), _>>()?;
 
-		//TODO: Chunked compute like in frac_add and bivariate multimle
-		// Parallel accumulation over the equality expansion: each term contributes to both
-		// the finite (x=1) and infinity (x=∞) round evaluations.
-		let partial_sums = eq_expansion
-			.as_ref()
+		// Perform chunked summation: for every row, evaluate all compositions and add up
+		// results to an array of round evals accumulators. Alternative would be to sum each
+		// composition on its own pass, but that would require reading the entirety of eq field
+		// buffer on each pass, which will evict the latter from the cache. By doing chunked
+		// compute, we reasonably hope that eq chunk always stays in L1 cache.
+		const MAX_CHUNK_VARS: usize = 8;
+		let chunk_vars = max(MAX_CHUNK_VARS, P::LOG_WIDTH).min(n_vars_remaining - 1);
+		let chunk_count = 1 << (n_vars_remaining - 1 - chunk_vars);
+
+		let packed_prime_evals = (0..chunk_count)
 			.into_par_iter()
-			.enumerate()
-			.fold(
+			.try_fold(
 				|| [[P::default(); M]; 2],
-				|[mut y_1, mut y_inf], (i, &eq_i)| {
-					// Gather the i-th evaluations of every multilinear at both halves.
-					let mut evals_1 = [P::default(); N];
-					let mut evals_inf = [P::default(); N];
+				|mut packed_prime_evals, chunk_index| -> Result<_, Error> {
+					let eq_chunk = eq_expansion.chunk(chunk_vars, chunk_index)?;
 
-					izip!(&splits_0, &splits_1, &mut evals_1, &mut evals_inf).for_each(
-						|(lo, hi, eval_1, eval_inf)| {
-							*eval_1 = hi.as_ref()[i];
-							*eval_inf = lo.as_ref()[i] + hi.as_ref()[i];
-						},
-					);
+					let splits_0_chunk = splits_0
+						.iter()
+						.map(|slice| slice.chunk(chunk_vars, chunk_index))
+						.collect::<Result<Vec<_>, _>>()?;
+					let splits_1_chunk = splits_1
+						.iter()
+						.map(|slice| slice.chunk(chunk_vars, chunk_index))
+						.collect::<Result<Vec<_>, _>>()?;
 
-					// Apply the compositions for this equality term.
-					comp(evals_1, eq_i, &mut y_1);
-					inf_comp(evals_inf, eq_i, &mut y_inf);
-					[y_1, y_inf]
+					let [y_1, y_inf] = &mut packed_prime_evals;
+					for (idx, &eq_i) in eq_chunk.as_ref().iter().enumerate() {
+						// Gather the idx-th evaluations of every multilinear at both halves.
+						let mut evals_1 = [P::default(); N];
+						let mut evals_inf = [P::default(); N];
+
+						izip!(
+							&splits_0_chunk,
+							&splits_1_chunk,
+							&mut evals_1,
+							&mut evals_inf
+						)
+						.for_each(|(lo, hi, eval_1, eval_inf)| {
+							let lo_i = lo.as_ref()[idx];
+							let hi_i = hi.as_ref()[idx];
+							*eval_1 = hi_i;
+							*eval_inf = lo_i + hi_i;
+						});
+
+						// Apply the compositions for this equality term.
+						comp(evals_1, eq_i, y_1);
+						inf_comp(evals_inf, eq_i, y_inf);
+					}
+
+					Ok(packed_prime_evals)
 				},
 			)
-			.collect::<Vec<_>>();
-
-		// Reduce per-thread accumulators into packed round evals per claim.
-		let packed_round_evals = partial_sums
-			.into_iter()
-			.map(|[coeffs_1, coeffs_inf]| {
-				zip(coeffs_1, coeffs_inf)
-					.map(|(y_1, y_inf)| RoundEvals2 { y_1, y_inf })
-					.collect::<Vec<_>>()
-			})
-			.reduce(|acc, g| zip(acc, g).map(|(acc_i, g_i)| acc_i + &g_i).collect())
-			.expect("Will be non_empty");
+			.try_reduce(
+				|| [[P::default(); M]; 2],
+				|lhs, rhs| {
+					let mut out = [[P::default(); M]; 2];
+					for claim_idx in 0..M {
+						out[0][claim_idx] = lhs[0][claim_idx] + rhs[0][claim_idx];
+						out[1][claim_idx] = lhs[1][claim_idx] + rhs[1][claim_idx];
+					}
+					Ok(out)
+				},
+			)?;
 
 		// Sample the next coordinate and interpolate each round polynomial.
 		let alpha = self.gruen32.next_coordinate();
-		let round_coeffs = packed_round_evals
-			.into_iter()
-			.zip_eq(last_eval)
-			.map(|(packed_evals, sum)| {
-				// Sum packed values into scalars, then interpolate using the expected sum.
-				let round_evals = packed_evals.sum_scalars(n_vars_remaining);
-				round_evals.interpolate_eq(sum, alpha)
-			})
-			.collect::<Vec<_>>();
+		let round_coeffs = izip!(
+			last_eval.iter().copied(),
+			packed_prime_evals[0].iter().copied(),
+			packed_prime_evals[1].iter().copied()
+		)
+		.map(|(sum, y_1, y_inf)| {
+			// Sum packed values into scalars, then interpolate using the expected sum.
+			let round_evals = RoundEvals2 { y_1, y_inf }.sum_scalars(n_vars_remaining);
+			round_evals.interpolate_eq(sum, alpha)
+		})
+		.collect::<Vec<_>>();
 		// State transition: execute produces coeffs for fold to consume.
 		self.last_coeffs_or_eval = RoundCoeffsOrEvals::Coeffs(
 			round_coeffs
