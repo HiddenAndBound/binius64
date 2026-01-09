@@ -9,9 +9,7 @@ use binius_math::{
 	test_utils::{random_field_buffer, random_scalars},
 };
 use binius_prover::protocols::sumcheck::{
-	Error,
-	batch_quadratic_mle::BatchQuadraticMleCheckProver,
-	common::MleCheckProver,
+	Error, batch_quadratic_mle::BatchQuadraticMleCheckProver, common::MleCheckProver,
 };
 use binius_transcript::{
 	ProverTranscript,
@@ -35,16 +33,16 @@ fn comp_1<Pf: PackedField>([a, b, c]: [Pf; N]) -> Pf {
 	(a + b) * c
 }
 
-fn batch_comp<Pf: PackedField>(evals: [Pf; N], eq_i: Pf, out: &mut [Pf; M]) {
+fn batch_comp<Pf: PackedField>(evals: [Pf; N], out: &mut [Pf; M]) {
 	let [a, b, c] = evals;
-	out[0] += (a * b - c) * eq_i;
-	out[1] += (a + b) * c * eq_i;
+	out[0] = a * b - c;
+	out[1] = (a + b) * c;
 }
 
-fn batch_inf_comp<Pf: PackedField>(evals: [Pf; N], eq_i: Pf, out: &mut [Pf; M]) {
+fn batch_inf_comp<Pf: PackedField>(evals: [Pf; N], out: &mut [Pf; M]) {
 	let [a, b, c] = evals;
-	out[0] += (a * b) * eq_i;
-	out[1] += (a + b) * c * eq_i;
+	out[0] = a * b;
+	out[1] = (a + b) * c;
 }
 
 fn eval_claims<Ff, Pf>(multilinears: &[FieldBuffer<Pf>; N], eval_point: &[Ff]) -> [Ff; M]
