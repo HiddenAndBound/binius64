@@ -37,8 +37,8 @@ impl<F, P, Composition, InfinityComposition, const N: usize, const M: usize>
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
-	Composition: Fn([P; N], P, &mut [P; M]) + Sync,
-	InfinityComposition: Fn([P; N], P, &mut [P; M]) + Sync,
+	Composition: Fn([P; N], &mut [P; M]) + Sync,
+	InfinityComposition: Fn([P; N], &mut [P; M]) + Sync,
 {
 	pub fn new(
 		mut multilinears: impl AsSlicesMut<P, N> + Send + 'static,
@@ -83,8 +83,8 @@ impl<F, P, Composition, InfinityComposition, const N: usize, const M: usize> Sum
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
-	Composition: Fn([P; N], P, &mut [P; M]) + Sync,
-	InfinityComposition: Fn([P; N], P, &mut [P; M]) + Sync,
+	Composition: Fn([P; N], &mut [P; M]) + Sync,
+	InfinityComposition: Fn([P; N], &mut [P; M]) + Sync,
 {
 	fn n_vars(&self) -> usize {
 		self.gruen32.n_vars_remaining()
@@ -141,6 +141,7 @@ where
 				|mut packed_prime_evals, chunk_index| -> Result<_, Error> {
 					let eq_chunk = eq_expansion.chunk(chunk_vars, chunk_index)?;
 
+					let [mut y_1_scratch, mut y_inf_scratch] = [[P::default(); M]; 2];
 					let splits_0_chunk = splits_0
 						.iter()
 						.map(|slice| slice.chunk(chunk_vars, chunk_index))
@@ -156,17 +157,22 @@ where
 						let mut evals_1 = [P::default(); N];
 						let mut evals_inf = [P::default(); N];
 
-						izip!(&splits_0_chunk, &splits_1_chunk, &mut evals_1, &mut evals_inf)
-							.for_each(|(lo, hi, eval_1, eval_inf)| {
-								let lo_i = lo.as_ref()[idx];
-								let hi_i = hi.as_ref()[idx];
-								*eval_1 = hi_i;
-								*eval_inf = lo_i + hi_i;
-							});
+						for i in 0..N {
+							let lo_i = splits_0_chunk[i].as_ref()[idx];
+							let hi_i = splits_1_chunk[i].as_ref()[idx];
+
+							evals_1[i] = hi_i;
+							evals_inf[i] = lo_i + hi_i;
+						}
 
 						// Apply the compositions for this equality term.
-						comp(evals_1, eq_i, y_1);
-						inf_comp(evals_inf, eq_i, y_inf);
+						comp(evals_1, &mut y_1_scratch);
+						inf_comp(evals_inf, &mut y_inf_scratch);
+
+						for i in 0..M {
+							y_1[i] += y_1_scratch[i] * eq_i;
+							y_inf[i] += y_inf_scratch[i] * eq_i;
+						}
 					}
 
 					Ok(packed_prime_evals)
@@ -268,8 +274,8 @@ impl<F, P, Composition, InfinityComposition, const N: usize, const M: usize> Mle
 where
 	F: Field,
 	P: PackedField<Scalar = F>,
-	Composition: Fn([P; N], P, &mut [P; M]) + Sync,
-	InfinityComposition: Fn([P; N], P, &mut [P; M]) + Sync,
+	Composition: Fn([P; N], &mut [P; M]) + Sync,
+	InfinityComposition: Fn([P; N], &mut [P; M]) + Sync,
 {
 	fn eval_point(&self) -> &[F] {
 		&self.gruen32.eval_point()[..self.n_vars()]
@@ -323,16 +329,16 @@ mod tests {
 		(a + b) * c
 	}
 
-	fn batch_comp<P: PackedField>(evals: [P; N], eq_i: P, out: &mut [P; M]) {
+	fn batch_comp<P: PackedField>(evals: [P; N], out: &mut [P; M]) {
 		let [a, b, c] = evals;
-		out[0] += (a * b - c) * eq_i;
-		out[1] += (a + b) * c * eq_i;
+		out[0] = a * b - c;
+		out[1] = (a + b) * c;
 	}
 
-	fn batch_inf_comp<P: PackedField>(evals: [P; N], eq_i: P, out: &mut [P; M]) {
+	fn batch_inf_comp<P: PackedField>(evals: [P; N], out: &mut [P; M]) {
 		let [a, b, c] = evals;
-		out[0] += (a * b) * eq_i;
-		out[1] += (a + b) * c * eq_i;
+		out[0] = a * b;
+		out[1] = (a + b) * c;
 	}
 
 	// Generates evaluation claims for an array of multilinears.
