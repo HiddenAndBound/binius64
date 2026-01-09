@@ -156,18 +156,13 @@ where
 						let mut evals_1 = [P::default(); N];
 						let mut evals_inf = [P::default(); N];
 
-						izip!(
-							&splits_0_chunk,
-							&splits_1_chunk,
-							&mut evals_1,
-							&mut evals_inf
-						)
-						.for_each(|(lo, hi, eval_1, eval_inf)| {
-							let lo_i = lo.as_ref()[idx];
-							let hi_i = hi.as_ref()[idx];
-							*eval_1 = hi_i;
-							*eval_inf = lo_i + hi_i;
-						});
+						izip!(&splits_0_chunk, &splits_1_chunk, &mut evals_1, &mut evals_inf)
+							.for_each(|(lo, hi, eval_1, eval_inf)| {
+								let lo_i = lo.as_ref()[idx];
+								let hi_i = hi.as_ref()[idx];
+								*eval_1 = hi_i;
+								*eval_inf = lo_i + hi_i;
+							});
 
 						// Apply the compositions for this equality term.
 						comp(evals_1, eq_i, y_1);
