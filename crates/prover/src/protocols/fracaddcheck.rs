@@ -10,9 +10,9 @@ use binius_utils::rayon::iter::{IntoParallelIterator, ParallelIterator};
 use binius_verifier::protocols::prodcheck::MultilinearEvalClaim;
 
 use crate::protocols::sumcheck::{
-	Error as SumcheckError, MleToSumCheckDecorator,
-	batch::batch_prove_and_write_evals,
-	common::SumcheckProver,
+	Error as SumcheckError,
+	batch::batch_prove_mle_and_write_evals,
+	common::MleCheckProver,
 	frac_add_mle::{self, FractionalBuffer},
 };
 
@@ -109,7 +109,7 @@ where
 	pub fn layer_prover(
 		mut self,
 		claim: (MultilinearEvalClaim<F>, MultilinearEvalClaim<F>),
-	) -> Result<(impl SumcheckProver<F>, Option<Self>), Error> {
+	) -> Result<(impl MleCheckProver<F>, Option<Self>), Error> {
 		let (num_claim, den_claim) = claim;
 		assert_eq!(
 			num_claim.point, den_claim.point,
@@ -130,18 +130,14 @@ where
 		let num_0 = FieldBuffer::new(num_0.log_len(), num_0.as_ref().into()).unwrap();
 		let num_1 = FieldBuffer::new(num_1.log_len(), num_1.as_ref().into()).unwrap();
 		let den_0 = FieldBuffer::new(den_0.log_len(), den_0.as_ref().into()).unwrap();
-		let den_1 =
-			FieldBuffer::new(den_1.log_len(), den_1.as_ref().into()).unwrap();
-
-		drop(num);
-		drop(den);
+		let den_1 = FieldBuffer::new(den_1.log_len(), den_1.as_ref().into()).unwrap();
 		let prover = frac_add_mle::new(
 			[num_0, num_1, den_0, den_1],
 			num_claim.point.clone(),
 			[num_claim.eval, den_claim.eval],
 		)?;
 
-		Ok((MleToSumCheckDecorator::new(prover), remaining))
+		Ok((prover, remaining))
 	}
 
 	/// Runs the fractional addition check protocol and returns the final evaluation claims.
@@ -170,7 +166,7 @@ where
 			let (sumcheck_prover, remaining) = prover.layer_prover(claim)?;
 			prover_opt = remaining;
 
-			let output = batch_prove_and_write_evals(vec![sumcheck_prover], transcript)?;
+			let output = batch_prove_mle_and_write_evals(vec![sumcheck_prover], transcript)?;
 
 			let mut multilinear_evals = output.multilinear_evals;
 			let evals = multilinear_evals.pop().expect("batch contains one prover");
