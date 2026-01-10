@@ -235,7 +235,7 @@ mod tests {
 	};
 	use binius_math::{
 		FieldBuffer,
-		multilinear::{eq::eq_ind, evaluate::evaluate},
+		multilinear::evaluate::evaluate,
 		test_utils::{random_field_buffer, random_scalars},
 		univariate::evaluate_univariate,
 	};
