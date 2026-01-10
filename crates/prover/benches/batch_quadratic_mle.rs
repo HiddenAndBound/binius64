@@ -63,8 +63,8 @@ where
 			};
 			composite_vals.push(composed);
 		}
-		let composite_buffer = FieldBuffer::new(n_vars, composite_vals).unwrap();
-		evaluate_inplace(composite_buffer, eval_point).unwrap()
+		let composite_buffer = FieldBuffer::new(n_vars, composite_vals);
+		evaluate_inplace(composite_buffer, eval_point)
 	})
 }
 
