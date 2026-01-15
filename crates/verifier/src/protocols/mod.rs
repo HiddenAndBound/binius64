@@ -3,6 +3,7 @@
 pub mod basefold;
 pub mod fracaddcheck;
 pub mod intmul;
+pub mod logup;
 pub mod mlecheck;
 pub mod prodcheck;
 pub mod pubcheck;
